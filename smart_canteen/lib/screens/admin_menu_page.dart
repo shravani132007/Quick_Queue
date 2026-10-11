@@ -1,530 +1,852 @@
 import 'package:flutter/material.dart';
 
-void main() {
-  runApp(const AdminApp());
-}
+import 'incoming_orders_pages.dart';
+import 'login_page.dart';
+import '../services/api_service.dart';
 
-class AdminApp extends StatelessWidget {
-  const AdminApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Admin - Daily Menu Management',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        fontFamily: 'Poppins',
-        scaffoldBackgroundColor: const Color(0xFFF4F6F9),
-        primaryColor: const Color(0xFF11998E),
-      ),
-      home: const AdminDashboardScreen(),
-    );
-  }
-}
-
-class MenuItemModel {
+class AdminMenuItem {
+  final int id;
   final String name;
   final String category;
   final double price;
+  final String dayOfWeek;
 
-  MenuItemModel({
+  const AdminMenuItem({
+    required this.id,
     required this.name,
     required this.category,
     required this.price,
+    required this.dayOfWeek,
   });
 }
 
+typedef AdminMenuPage = AdminDashboardScreen;
+
 class AdminDashboardScreen extends StatefulWidget {
-  const AdminDashboardScreen({super.key});
+  final int shopId;
+  final String initialShopName;
+  final String initialLocation;
+
+  const AdminDashboardScreen({
+    super.key,
+    this.shopId = 1,
+    this.initialShopName = 'KIT Main Canteen',
+    this.initialLocation = 'Main College Campus',
+  });
 
   @override
   State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  // Shop Registration State
-  final TextEditingController _shopNameController = TextEditingController();
-  final _shopFormKey = GlobalKey<FormState>();
-  String registeredShopName = '';
-  bool isShopRegistered = false;
+  static const teal = Color(0xFF49E0E0);
 
-  String selectedDay = 'Monday';
-  int selectedSidebarIndex = 0;
+  final _shopController = TextEditingController();
+  final _locationController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _categoryController = TextEditingController();
+  final _priceController = TextEditingController();
 
-  final List<String> days = [
+  final List<String> _days = const [
     'Monday',
     'Tuesday',
     'Wednesday',
     'Thursday',
     'Friday',
     'Saturday',
-    'Sunday'
+    'Sunday',
   ];
 
-  final Map<String, List<MenuItemModel>> weeklyMenu = {
-    'Monday': [
-      MenuItemModel(name: 'Veg Sandwich', category: 'Snacks', price: 40),
-      MenuItemModel(name: 'Cold Coffee', category: 'Beverages', price: 50),
-    ],
-    'Tuesday': [
-      MenuItemModel(name: 'Paneer Roll', category: 'Snacks', price: 70),
-    ],
-    'Wednesday': [],
-    'Thursday': [],
-    'Friday': [],
-    'Saturday': [],
-    'Sunday': [],
-  };
+  int _selectedDay = 0;
+  List<AdminMenuItem> _menuItems = [];
+  bool _loading = true;
+  bool _savingShop = false;
+  String? _loadError;
 
-  final _formKey = GlobalKey<FormState>();
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _priceController = TextEditingController();
-  String _selectedCategory = 'Snacks';
+  List<AdminMenuItem> get _currentMenu => _menuItems
+      .where(
+        (item) =>
+            item.dayOfWeek == 'All' || item.dayOfWeek == _days[_selectedDay],
+      )
+      .toList();
 
-  final List<String> categories = ['Snacks', 'Meals', 'Beverages'];
+  @override
+  void initState() {
+    super.initState();
+    _shopController.text = widget.initialShopName;
+    _locationController.text = widget.initialLocation;
+    _loadShopAndMenu();
+  }
+
+  Future<void> _loadShopAndMenu() async {
+    setState(() {
+      _loading = true;
+      _loadError = null;
+    });
+    try {
+      final results = await Future.wait<dynamic>([
+        ApiService.getShop(widget.shopId),
+        ApiService.getMenuItems(widget.shopId),
+      ]);
+      if (!mounted) return;
+      final shop = results[0]['shop'] as Map<String, dynamic>;
+      final items = results[1] as List<Map<String, dynamic>>;
+      setState(() {
+        _shopController.text = shop['name']?.toString() ?? '';
+        _locationController.text = shop['location']?.toString() ?? '';
+        _menuItems = items.map((item) {
+          return AdminMenuItem(
+            id: item['id'] as int,
+            name: item['name']?.toString() ?? '',
+            category: item['category']?.toString() ?? '',
+            price: (item['price'] as num).toDouble(),
+            dayOfWeek: item['day_of_week']?.toString() ?? 'All',
+          );
+        }).toList();
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _loadError = error.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
 
   @override
   void dispose() {
-    _shopNameController.dispose();
+    _shopController.dispose();
+    _locationController.dispose();
     _nameController.dispose();
+    _categoryController.dispose();
     _priceController.dispose();
     super.dispose();
   }
 
-  void _registerShop() {
-    if (_shopFormKey.currentState!.validate()) {
-      setState(() {
-        registeredShopName = _shopNameController.text.trim();
-        isShopRegistered = true;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Shop "$registeredShopName" saved successfully!'),
-          backgroundColor: const Color(0xFF11998E),
-        ),
-      );
-    }
-  }
-
-  void _addItem() {
-    if (_formKey.currentState!.validate()) {
-      setState(() {
-        weeklyMenu[selectedDay]!.add(
-          MenuItemModel(
-            name: _nameController.text.trim(),
-            category: _selectedCategory,
-            price: double.tryParse(_priceController.text.trim()) ?? 0.0,
-          ),
-        );
-        _nameController.clear();
-        _priceController.clear();
-        _selectedCategory = 'Snacks';
-      });
-    }
-  }
-
-  void _deleteItem(int index) {
-    setState(() {
-      weeklyMenu[selectedDay]!.removeAt(index);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isDesktop = MediaQuery.of(context).size.width >= 850;
-
-    return Scaffold(
-      drawer: isDesktop ? null : Drawer(child: _buildSidebar()),
-      appBar: isDesktop
-          ? null
-          : AppBar(
-              backgroundColor: const Color(0xFF1E293B),
-              iconTheme: const IconThemeData(color: Colors.white),
-              title: Text(
-                isShopRegistered ? registeredShopName : 'Admin Portal',
-                style: const TextStyle(color: Color(0xFF38EF7D), fontSize: 18),
+  void _showAddItemDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Add item for ${_days[_selectedDay]}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Item name',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (isDesktop)
-            SizedBox(
-              width: 250,
-              child: _buildSidebar(),
-            ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(30.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    isShopRegistered
-                        ? '$registeredShopName Dashboard'
-                        : 'Weekly Menu Manager',
-                    style: const TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1E293B),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _categoryController,
+                decoration: const InputDecoration(
+                  labelText: 'Category',
+                  hintText: 'Snacks, Meals, Beverages...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _priceController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Price (₹)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = _nameController.text.trim();
+              final category = _categoryController.text.trim();
+              final price = double.tryParse(_priceController.text.trim());
+
+              if (name.isEmpty ||
+                  category.isEmpty ||
+                  price == null ||
+                  price <= 0) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter valid item details.'),
+                  ),
+                );
+                return;
+              }
+
+              try {
+                await ApiService.addMenuItem(
+                  shopId: widget.shopId,
+                  name: name,
+                  category: category,
+                  price: price,
+                  quantity: 50,
+                  dayOfWeek: _days[_selectedDay],
+                );
+                if (!mounted) return;
+                _nameController.clear();
+                _categoryController.clear();
+                _priceController.clear();
+                await _loadShopAndMenu();
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+              } catch (error) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      error.toString().replaceFirst('Exception: ', ''),
                     ),
                   ),
-                  const SizedBox(height: 20),
-
-                  // Shop Registration Card / Banner
-                  _buildShopRegistrationCard(),
-
-                  const SizedBox(height: 25),
-                  _buildDaysTabBar(),
-                  const SizedBox(height: 25),
-                  _buildFormCard(),
-                  const SizedBox(height: 30),
-                  _buildTableCard(),
-                ],
-              ),
-            ),
+                );
+              }
+            },
+            child: const Text('Add item'),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildShopRegistrationCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 8,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      child: isShopRegistered
-          ? Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Future<void> _saveShopDetails() async {
+    if (_shopController.text.trim().isEmpty ||
+        _locationController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Shop name and location cannot be empty.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _savingShop = true);
+    try {
+      await ApiService.updateShop(
+        shopId: widget.shopId,
+        name: _shopController.text.trim(),
+        location: _locationController.text.trim(),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Shop details saved.')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _savingShop = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF071B2D),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(72),
+        child: AppBar(
+          automaticallyImplyLeading: false,
+          backgroundColor: const Color(0xFF071B2D),
+          elevation: 0,
+          toolbarHeight: 72,
+          title: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
               children: [
+                const Icon(Icons.restaurant_rounded, color: teal, size: 28),
+                const SizedBox(width: 10),
+                const Text(
+                  'Quick Queue',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const Spacer(),
+                const Text(
+                  'Admin Dashboard',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const Spacer(),
                 Row(
                   children: [
-                    const CircleAvatar(
-                      backgroundColor: Color(0xFFE6F4F1),
-                      child: Icon(Icons.store, color: Color(0xFF11998E)),
+                    IconButton(
+                      tooltip: 'Notifications',
+                      onPressed: () {},
+                      icon: const Icon(Icons.notifications_none_rounded),
+                      color: Colors.white,
+                      iconSize: 26,
                     ),
-                    const SizedBox(width: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Registered Shop / Canteen Name',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF64748B),
-                            fontWeight: FontWeight.w500,
+                    IconButton(
+                      tooltip: 'Menu',
+                      onPressed: () {},
+                      icon: const Icon(Icons.grid_view_rounded),
+                      color: Colors.white,
+                      iconSize: 24,
+                    ),
+                    IconButton(
+                      tooltip: 'Incoming orders',
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                IncomingOrdersPage(shopId: widget.shopId),
                           ),
-                        ),
-                        Text(
-                          registeredShopName,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF1E293B),
-                          ),
-                        ),
-                      ],
+                        );
+                      },
+                      icon: const Icon(Icons.receipt_long_rounded),
+                      color: Colors.white,
+                      iconSize: 24,
+                    ),
+                    IconButton(
+                      tooltip: 'Sign Out',
+                      onPressed: () {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(builder: (_) => const LoginPage()),
+                        );
+                      },
+                      icon: const Icon(Icons.logout_rounded),
+                      color: Colors.white,
+                      iconSize: 24,
                     ),
                   ],
                 ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      isShopRegistered = false;
-                    });
-                  },
-                  icon: const Icon(Icons.edit, size: 16),
-                  label: const Text('Edit Name'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF11998E),
-                    side: const BorderSide(color: Color(0xFF11998E)),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1180),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Manage your shop information and weekly menu',
+                  style: TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
                   ),
                 ),
-              ],
-            )
-          : Form(
-              key: _shopFormKey,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Register Your Shop Name',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF1E293B),
+                const SizedBox(height: 26),
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF0D1E33),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.storefront_rounded,
+                        color: Color(0xFF49E0E0),
+                        size: 26,
+                      ),
                     ),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Shop Details',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 30,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 18,
                   ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Enter your shop or canteen name to display across your menu and customer portal.',
-                    style: TextStyle(fontSize: 13, color: Color(0xFF64748B)),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0D1E33),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFF1F5577)),
                   ),
-                  const SizedBox(height: 16),
-                  Row(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Expanded(
-                        child: TextFormField(
-                          controller: _shopNameController,
-                          decoration: const InputDecoration(
-                            hintText: 'e.g. Royal Canteen & Bakery',
-                            prefixIcon: Icon(Icons.storefront),
-                            border: OutlineInputBorder(),
-                            contentPadding:
-                                EdgeInsets.symmetric(horizontal: 12),
-                          ),
-                          validator: (val) => val == null || val.trim().isEmpty
-                              ? 'Please enter your shop name'
-                              : null,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Shop name',
+                              style: TextStyle(
+                                color: Color(0xFFB7C8D8),
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _shopController,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                              ),
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: const Color(0xFF0D1E33),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2A4968),
+                                  ),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2A4968),
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF49E0E0),
+                                    width: 2,
+                                  ),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 18,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      ElevatedButton.icon(
-                        onPressed: _registerShop,
-                        icon: const Icon(Icons.check),
-                        label: const Text('Save Shop'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF11998E),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 18),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                      const SizedBox(width: 18),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Location',
+                              style: TextStyle(
+                                color: Color(0xFFB7C8D8),
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _locationController,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                              ),
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: const Color(0xFF0D1E33),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2A4968),
+                                  ),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF2A4968),
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF49E0E0),
+                                    width: 2,
+                                  ),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 18,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      SizedBox(
+                        height: 64,
+                        child: ElevatedButton.icon(
+                          onPressed: _savingShop ? null : _saveShopDetails,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF49E0E0),
+                            foregroundColor: const Color(0xFF041d2e),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(horizontal: 18),
+                          ),
+                          icon: const Icon(Icons.store_mall_directory_rounded),
+                          label: Text(
+                            _savingShop ? 'Saving...' : 'Save shop details',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-    );
-  }
-
-  Widget _buildSidebar() {
-    return Container(
-      color: const Color(0xFF1E293B),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.restaurant, color: Color(0xFF38EF7D)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  isShopRegistered ? registeredShopName : 'Admin Portal',
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF38EF7D),
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                ),
+                const SizedBox(height: 30),
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF0D1E33),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.restaurant_menu_rounded,
+                        color: Color(0xFF49E0E0),
+                        size: 26,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Weekly Menu',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 30,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Manage dishes by day',
+                  style: TextStyle(color: Color(0xFFB7C8D8), fontSize: 20),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: List.generate(_days.length, (index) {
+                    final selected = _selectedDay == index;
+                    return Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          right: index < _days.length - 1 ? 10 : 0,
+                        ),
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() => _selectedDay = index);
+                          },
+                          child: Container(
+                            height: 52,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? const Color(0xFF49E0E0)
+                                  : const Color(0xFF0D1E33),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: const Color(0xFF2A4968),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (selected)
+                                  const Padding(
+                                    padding: EdgeInsets.only(right: 8),
+                                    child: Icon(
+                                      Icons.check_rounded,
+                                      size: 20,
+                                      color: Color(0xFF061B2D),
+                                    ),
+                                  ),
+                                Text(
+                                  _days[index],
+                                  style: TextStyle(
+                                    color: selected
+                                        ? const Color(0xFF061B2D)
+                                        : Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      '${_days[_selectedDay]} menu',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 36,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      onPressed: _showAddItemDialog,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF49E0E0),
+                        foregroundColor: const Color(0xFF061B2D),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: 14,
+                        ),
+                      ),
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text(
+                        'Add item',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0D1E33),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFF1F5577)),
                   ),
+                  child: _loading
+                      ? const Padding(
+                          padding: EdgeInsets.all(30),
+                          child: Center(child: CircularProgressIndicator()),
+                        )
+                      : _loadError != null
+                      ? Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            children: [
+                              Text(
+                                'Could not load menu: $_loadError',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                              TextButton(
+                                onPressed: _loadShopAndMenu,
+                                child: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        )
+                      : _currentMenu.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.all(30),
+                          child: Center(
+                            child: Text(
+                              'No items added for this day yet.',
+                              style: TextStyle(
+                                color: Color(0xFFB7C8D8),
+                                fontSize: 18,
+                              ),
+                            ),
+                          ),
+                        )
+                      : Column(
+                          children: List.generate(_currentMenu.length, (index) {
+                            final item = _currentMenu[index];
+                            return Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 14,
+                              ),
+                              decoration: BoxDecoration(
+                                border: Border(
+                                  bottom: BorderSide(
+                                    color: index == _currentMenu.length - 1
+                                        ? Colors.transparent
+                                        : const Color(0xFF1F5577),
+                                  ),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 42,
+                                    height: 42,
+                                    decoration: const BoxDecoration(
+                                      color: Color(0xFF49E0E0),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.fastfood_rounded,
+                                      color: Color(0xFF061B2D),
+                                      size: 22,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item.name,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          item.category,
+                                          style: const TextStyle(
+                                            color: Color(0xFFB7C8D8),
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    '₹${item.price.toStringAsFixed(0)}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Container(
+                                    width: 42,
+                                    height: 42,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFF4D5A),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: IconButton(
+                                      tooltip: 'Delete item',
+                                      padding: EdgeInsets.zero,
+                                      onPressed: () async {
+                                        try {
+                                          await ApiService.deleteMenuItem(
+                                            item.id,
+                                          );
+                                          await _loadShopAndMenu();
+                                        } catch (error) {
+                                          if (!context.mounted) return;
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                error.toString().replaceFirst(
+                                                  'Exception: ',
+                                                  '',
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                      icon: const Icon(
+                                        Icons.delete_outline_rounded,
+                                        color: Colors.white,
+                                        size: 22,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 30),
-          _buildSidebarItem(0, Icons.calendar_today, 'Daily Menus'),
-          _buildSidebarItem(1, Icons.assignment, 'Manage Orders'),
-          _buildSidebarItem(2, Icons.settings, 'Settings'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSidebarItem(int index, IconData icon, String title) {
-    final bool isActive = selectedSidebarIndex == index;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            selectedSidebarIndex = index;
-          });
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: isActive ? const Color(0xFF334155) : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                icon,
-                color: isActive ? Colors.white : const Color(0xFF94A3B8),
-                size: 18,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                title,
-                style: TextStyle(
-                  color: isActive ? Colors.white : const Color(0xFF94A3B8),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDaysTabBar() {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: days.map<Widget>((day) {
-          final bool isActive = selectedDay == day;
-          return Padding(
-            padding: const EdgeInsets.only(right: 10.0),
-            child: OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                backgroundColor:
-                    isActive ? const Color(0xFF11998E) : Colors.white,
-                foregroundColor:
-                    isActive ? Colors.white : const Color(0xFF333333),
-                side: BorderSide(
-                  color: isActive
-                      ? const Color(0xFF11998E)
-                      : const Color(0xFFCBD5E1),
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-              ),
-              onPressed: () {
-                setState(() {
-                  selectedDay = day;
-                });
-              },
-              child: Text(day),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  Widget _buildFormCard() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 12)],
-      ),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Add Item for $selectedDay',
-                style: const TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
+                const SizedBox(height: 28),
                 SizedBox(
-                  width: 200,
-                  child: TextFormField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(
-                        labelText: 'Name', border: OutlineInputBorder()),
-                    validator: (val) =>
-                        val == null || val.isEmpty ? 'Required' : null,
+                  width: double.infinity,
+                  height: 62,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              IncomingOrdersPage(shopId: widget.shopId),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(
+                        color: Color(0xFF49E0E0),
+                        width: 2,
+                      ),
+                      foregroundColor: Colors.white,
+                      backgroundColor: Colors.transparent,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    icon: const Icon(
+                      Icons.receipt_long_rounded,
+                      color: Color(0xFF49E0E0),
+                    ),
+                    label: const Text(
+                      'View Incoming Orders',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
-                ),
-                SizedBox(
-                  width: 150,
-                  child: DropdownButtonFormField<String>(
-                    value: _selectedCategory,
-                    decoration: const InputDecoration(
-                        labelText: 'Category', border: OutlineInputBorder()),
-                    items: categories
-                        .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: (v) => setState(() => _selectedCategory = v!),
-                  ),
-                ),
-                SizedBox(
-                  width: 100,
-                  child: TextFormField(
-                    controller: _priceController,
-                    decoration: const InputDecoration(
-                        labelText: 'Price', border: OutlineInputBorder()),
-                    keyboardType: TextInputType.number,
-                    validator: (val) => double.tryParse(val ?? '') == null
-                        ? 'Invalid'
-                        : null,
-                  ),
-                ),
-                ElevatedButton(
-                  onPressed: _addItem,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF11998E),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 20),
-                  ),
-                  child: const Text('Add'),
                 ),
               ],
             ),
-          ],
+          ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildTableCard() {
-    final items = weeklyMenu[selectedDay] ?? [];
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(12)),
-      child: DataTable(
-        columns: const [
-          DataColumn(label: Text('Name')),
-          DataColumn(label: Text('Category')),
-          DataColumn(label: Text('Price')),
-          DataColumn(label: Text('Action')),
-        ],
-        rows: List.generate(items.length, (index) {
-          final item = items[index];
-          return DataRow(cells: [
-            DataCell(Text(item.name)),
-            DataCell(Text(item.category)),
-            DataCell(Text('₹${item.price.toStringAsFixed(0)}')),
-            DataCell(
-              IconButton(
-                icon: const Icon(Icons.delete, color: Colors.redAccent),
-                onPressed: () => _deleteItem(index),
-              ),
-            ),
-          ]);
-        }),
       ),
     );
   }
 }
+
+// This temporary page is replaced by the actual incoming orders screen
+// in the next file below.

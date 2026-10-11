@@ -1,0 +1,534 @@
+#!/usr/bin/env python3
+"""
+Quick Queue / Smart Canteen
+Flask RESTful API Backend
+"""
+
+import os
+import random
+import sqlite3
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+app = Flask(__name__)
+# Enable CORS for Flutter web / mobile app requests
+CORS(
+    app,
+    resources={r"/api/*": {"origins": "*"}},
+    allow_headers=["Content-Type", "Authorization"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "..", "database", "canteen.db")
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "service": "Smart Canteen Backend",
+        "version": "1.0.0"
+    }), 200
+
+
+# ============================================================
+# AUTHENTICATION ENDPOINTS
+# ============================================================
+@app.route("/api/auth/login", methods=["POST"])
+def login():
+    data = request.get_json() or {}
+    username = data.get("username", "").strip()
+    password = data.get("password", "").strip()
+    role = (data.get("role") or "user").strip().lower()
+
+    if not username or not password:
+        return jsonify({"error": "Username/email and password are required"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT id, username, email, role, phone
+        FROM users
+        WHERE (LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?))
+          AND password_hash = ?
+          AND LOWER(role) = LOWER(?)
+        """,
+        (username, username, password, role),
+    )
+    user = cursor.fetchone()
+
+    shop_info = None
+    if user and role == "admin":
+        cursor.execute(
+            """
+            SELECT id, shop_no, name, owner_name, contact_no, location_type, location, is_open, image_url
+            FROM shops
+            WHERE admin_id = ?
+               OR (contact_no = ? AND contact_no != '')
+               OR (LOWER(owner_name) = LOWER(?) AND owner_name != '')
+            ORDER BY id ASC LIMIT 1
+            """,
+            (user["id"], user["phone"], user["username"]),
+        )
+        s_row = cursor.fetchone()
+        if s_row:
+            shop_info = {
+                "id": s_row["id"],
+                "shop_no": s_row["shop_no"],
+                "name": s_row["name"],
+                "owner_name": s_row["owner_name"],
+                "contact_no": s_row["contact_no"],
+                "location_type": s_row["location_type"],
+                "location": s_row["location"],
+                "is_open": bool(s_row["is_open"]),
+                "image_url": s_row["image_url"],
+            }
+    conn.close()
+
+    if user:
+        return jsonify({
+            "success": True,
+            "message": f"Logged in as {role.upper()}",
+            "user": {
+                "id": user["id"],
+                "username": user["username"],
+                "email": user["email"],
+                "role": user["role"],
+                "phone": user["phone"]
+            },
+            "shop": shop_info
+        }), 200
+    else:
+        # For testing / prototype simplicity: fallback match or invalid credentials
+        return jsonify({
+            "success": False,
+            "error": "Invalid credentials or role mismatch"
+        }), 401
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def register():
+    data = request.get_json() or {}
+    username = data.get("username", "").strip()
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
+    role = data.get("role", "user")
+    phone = data.get("phone", "")
+
+    if not username or not email or not password:
+        return jsonify({"error": "Username, email, and password are required"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO users (username, email, password_hash, role, phone) VALUES (?, ?, ?, ?, ?)",
+            (username, email, password, role, phone),
+        )
+        conn.commit()
+        user_id = cursor.lastrowid
+        conn.close()
+        return jsonify({
+            "success": True,
+            "message": "User registered successfully",
+            "user_id": user_id
+        }), 201
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({"error": "Username or email already exists"}), 409
+
+
+# ============================================================
+# SHOPS / CANTEENS ENDPOINTS
+# ============================================================
+@app.route("/api/shops", methods=["GET"])
+def get_shops():
+    admin_id = request.args.get("admin_id")
+    owner_phone = request.args.get("phone")
+    owner_name = request.args.get("owner")
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    if admin_id or owner_phone or owner_name:
+        cursor.execute(
+            """
+            SELECT * FROM shops
+            WHERE (admin_id = ? AND admin_id IS NOT NULL)
+               OR (contact_no = ? AND contact_no != '')
+               OR (LOWER(owner_name) = LOWER(?) AND owner_name != '')
+            ORDER BY id ASC
+            """,
+            (admin_id, owner_phone or "", owner_name or ""),
+        )
+    else:
+        cursor.execute("SELECT * FROM shops ORDER BY id ASC")
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    shops = [
+        {
+            "id": row["id"],
+            "shop_no": row["shop_no"],
+            "name": row["name"],
+            "owner_name": row["owner_name"],
+            "contact_no": row["contact_no"],
+            "location_type": row["location_type"],
+            "location": row["location"],
+            "is_open": bool(row["is_open"]),
+            "image_url": row["image_url"],
+            "admin_id": row["admin_id"] if "admin_id" in row.keys() else None,
+        }
+        for row in rows
+    ]
+    return jsonify({"success": True, "shops": shops}), 200
+
+
+@app.route("/api/shops", methods=["POST"])
+def register_shop():
+    data = request.get_json() or {}
+    shop_no = data.get("shop_no", "").strip()
+    name = data.get("name", "").strip()
+    owner_name = data.get("owner_name", "").strip()
+    contact_no = data.get("contact_no", "").strip()
+    location_type = data.get("location_type", "Main Canteen").strip()
+    location = data.get("location", "").strip()
+    image_url = data.get("image_url", "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?q=80&w=800&auto=format&fit=crop")
+    admin_id = data.get("admin_id")
+
+    if not shop_no or not name or not contact_no or not location:
+        return jsonify({"error": "Shop number, name, contact number, and location are required"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    if not admin_id:
+        cursor.execute(
+            "SELECT id FROM users WHERE (phone = ? OR LOWER(username) = LOWER(?)) AND role = 'admin' LIMIT 1",
+            (contact_no, owner_name),
+        )
+        matched_user = cursor.fetchone()
+        if matched_user:
+            admin_id = matched_user["id"]
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO shops (shop_no, name, owner_name, contact_no, location_type, location, is_open, image_url, admin_id)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (shop_no, name, owner_name, contact_no, location_type, location, image_url, admin_id),
+        )
+        conn.commit()
+        shop_id = cursor.lastrowid
+        conn.close()
+        return jsonify({
+            "success": True,
+            "message": "Shop registered successfully",
+            "shop_id": shop_id
+        }), 201
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({"error": f"Shop with number {shop_no} already exists"}), 409
+
+
+@app.route("/api/shops/<int:shop_id>", methods=["GET"])
+def get_shop_by_id(shop_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM shops WHERE id = ?", (shop_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"error": "Shop not found"}), 404
+
+    return jsonify({
+        "success": True,
+        "shop": dict(row)
+    }), 200
+
+
+# ============================================================
+# MENU ITEMS / DISHES ENDPOINTS
+# ============================================================
+@app.route("/api/shops/<int:shop_id>/menu", methods=["GET"])
+def get_menu_items(shop_id):
+    category = request.args.get("category")
+    conn = get_db()
+    cursor = conn.cursor()
+
+    if category and category.lower() != "all":
+        cursor.execute(
+            "SELECT * FROM menu_items WHERE shop_id = ? AND category = ? ORDER BY id ASC",
+            (shop_id, category),
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM menu_items WHERE shop_id = ? ORDER BY id ASC",
+            (shop_id,),
+        )
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    dishes = [
+        {
+            "id": row["id"],
+            "shop_id": row["shop_id"],
+            "name": row["name"],
+            "category": row["category"],
+            "price": float(row["price"]),
+            "quantity": row["quantity"],
+            "is_available": bool(row["is_available"]),
+            "day_of_week": row["day_of_week"],
+            "image_url": row["image_url"]
+        }
+        for row in rows
+    ]
+    return jsonify({"success": True, "dishes": dishes}), 200
+
+
+@app.route("/api/shops/<int:shop_id>/menu", methods=["POST"])
+def add_menu_item(shop_id):
+    data = request.get_json() or {}
+    name = data.get("name", "").strip()
+    category = data.get("category", "Snacks").strip()
+    price = data.get("price")
+    quantity = data.get("quantity", 50)
+    day_of_week = data.get("day_of_week", "All")
+
+    if not name or price is None or float(price) <= 0:
+        return jsonify({"error": "Valid name and positive price are required"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO menu_items (shop_id, name, category, price, quantity, is_available, day_of_week)
+        VALUES (?, ?, ?, ?, ?, 1, ?)
+        """,
+        (shop_id, name, category, float(price), int(quantity), day_of_week),
+    )
+    conn.commit()
+    item_id = cursor.lastrowid
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "message": "Dish added to menu",
+        "dish_id": item_id
+    }), 201
+
+
+@app.route("/api/menu/<int:item_id>", methods=["PUT"])
+def update_menu_item(item_id):
+    data = request.get_json() or {}
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE menu_items
+        SET name = COALESCE(?, name),
+            category = COALESCE(?, category),
+            price = COALESCE(?, price),
+            quantity = COALESCE(?, quantity),
+            is_available = COALESCE(?, is_available)
+        WHERE id = ?
+        """,
+        (
+            data.get("name"),
+            data.get("category"),
+            data.get("price"),
+            data.get("quantity"),
+            data.get("is_available"),
+            item_id,
+        ),
+    )
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+
+    if affected == 0:
+        return jsonify({"error": "Menu item not found"}), 404
+
+    return jsonify({"success": True, "message": "Dish updated successfully"}), 200
+
+
+@app.route("/api/menu/<int:item_id>", methods=["DELETE"])
+def delete_menu_item(item_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM menu_items WHERE id = ?", (item_id,))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+
+    if affected == 0:
+        return jsonify({"error": "Menu item not found"}), 404
+
+    return jsonify({"success": True, "message": "Dish deleted successfully"}), 200
+
+
+# ============================================================
+# ORDERS & TOKENS ENDPOINTS
+# ============================================================
+@app.route("/api/orders", methods=["POST"])
+def place_order():
+    data = request.get_json() or {}
+    shop_id = data.get("shop_id", 1)
+    customer_name = data.get("customer_name", "Student").strip()
+    items = data.get("items", [])  # list of {menu_item_id, quantity, name, price}
+
+    if not items:
+        return jsonify({"error": "Order must contain at least one item"}), 400
+
+    # Generate token e.g. #TK-4829
+    token = f"#TK-{random.randint(1000, 9999)}"
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    total_amount = 0.0
+    order_items_to_insert = []
+
+    for item in items:
+        dish_id = item.get("menu_item_id")
+        qty = int(item.get("quantity", 1))
+
+        cursor.execute("SELECT id, name, price, quantity FROM menu_items WHERE id = ?", (dish_id,))
+        dish = cursor.fetchone()
+        if not dish:
+            continue
+
+        item_name = dish["name"]
+        price = float(dish["price"])
+        subtotal = price * qty
+        total_amount += subtotal
+
+        # Decrease inventory if available
+        new_qty = max(0, dish["quantity"] - qty)
+        cursor.execute("UPDATE menu_items SET quantity = ? WHERE id = ?", (new_qty, dish_id))
+
+        order_items_to_insert.append((dish_id, item_name, qty, price, subtotal))
+
+    cursor.execute(
+        """
+        INSERT INTO orders (token, shop_id, customer_name, total_amount, status, payment_status, payment_method)
+        VALUES (?, ?, ?, ?, 'pending', 'paid', 'UPI')
+        """,
+        (token, shop_id, customer_name, total_amount),
+    )
+    order_id = cursor.lastrowid
+
+    for o_item in order_items_to_insert:
+        cursor.execute(
+            """
+            INSERT INTO order_items (order_id, menu_item_id, item_name, quantity, unit_price, subtotal)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (order_id, o_item[0], o_item[1], o_item[2], o_item[3], o_item[4]),
+        )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "message": "Order placed successfully!",
+        "token": token,
+        "order_id": order_id,
+        "total_amount": total_amount,
+        "status": "pending"
+    }), 201
+
+
+@app.route("/api/shops/<int:shop_id>/orders", methods=["GET"])
+def get_incoming_orders(shop_id):
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "SELECT * FROM orders WHERE shop_id = ? ORDER BY id DESC",
+        (shop_id,),
+    )
+    order_rows = cursor.fetchall()
+
+    orders_list = []
+    for o in order_rows:
+        cursor.execute(
+            "SELECT item_name, quantity, unit_price, subtotal FROM order_items WHERE order_id = ?",
+            (o["id"],),
+        )
+        item_rows = cursor.fetchall()
+        items = [
+            {
+                "name": ir["item_name"],
+                "qty": ir["quantity"],
+                "price": float(ir["unit_price"]),
+                "subtotal": float(ir["subtotal"])
+            }
+            for ir in item_rows
+        ]
+
+        orders_list.append({
+            "id": o["id"],
+            "token": o["token"],
+            "customer_name": o["customer_name"],
+            "total": float(o["total_amount"]),
+            "status": o["status"],
+            "payment_status": o["payment_status"],
+            "created_at": o["created_at"],
+            "items": items
+        })
+
+    conn.close()
+    return jsonify({"success": True, "orders": orders_list}), 200
+
+
+@app.route("/api/orders/<int:order_id>/status", methods=["PATCH"])
+def update_order_status(order_id):
+    data = request.get_json() or {}
+    new_status = data.get("status", "").lower()
+
+    valid_statuses = ["pending", "preparing", "ready", "completed", "rejected"]
+    if new_status not in valid_statuses:
+        return jsonify({"error": f"Invalid status. Must be one of {valid_statuses}"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (new_status, order_id),
+    )
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+
+    if affected == 0:
+        return jsonify({"error": "Order not found"}), 404
+
+    return jsonify({
+        "success": True,
+        "message": f"Order status updated to '{new_status}'"
+    }), 200
+
+
+if __name__ == "__main__":
+    print("[*] Starting Quick Queue / Smart Canteen Flask Server on port 5000...")
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,5 +1,6 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
+
+import '../services/api_service.dart';
 
 void main() {
   runApp(const CanteenAdminDashboardApp());
@@ -59,14 +60,11 @@ class OrderItem {
   final int qty;
   final double price;
 
-  OrderItem({
-    required this.name,
-    required this.qty,
-    required this.price,
-  });
+  OrderItem({required this.name, required this.qty, required this.price});
 }
 
 class AdminOrderModel {
+  final int id;
   final String token;
   final String time;
   final List<OrderItem> items;
@@ -74,6 +72,7 @@ class AdminOrderModel {
   OrderStatus status;
 
   AdminOrderModel({
+    required this.id,
     required this.token,
     required this.time,
     required this.items,
@@ -104,35 +103,81 @@ class CanteenAdminDashboardApp extends StatelessWidget {
   }
 }
 
+typedef IncomingOrdersPage = AdminOrdersPage;
+
 class AdminOrdersPage extends StatefulWidget {
-  const AdminOrdersPage({super.key});
+  final int shopId;
+
+  const AdminOrdersPage({super.key, this.shopId = 1});
 
   @override
   State<AdminOrdersPage> createState() => _AdminOrdersPageState();
 }
 
 class _AdminOrdersPageState extends State<AdminOrdersPage> {
-  final List<AdminOrderModel> _activeOrders = [
-    AdminOrderModel(
-      token: '#TK-4829',
-      time: '10:42 AM',
-      items: [
-        OrderItem(name: 'Veg Cheese Burger', qty: 2, price: 60),
-        OrderItem(name: 'Cold Coffee', qty: 1, price: 40),
-      ],
-      total: 160,
-      status: OrderStatus.pending,
-    ),
-    AdminOrderModel(
-      token: '#TK-7310',
-      time: '10:45 AM',
-      items: [
-        OrderItem(name: 'Paneer Butter Masala Meal', qty: 1, price: 120),
-      ],
-      total: 120,
-      status: OrderStatus.preparing,
-    ),
-  ];
+  final List<AdminOrderModel> _activeOrders = [];
+  bool _loadingOrders = true;
+  String? _ordersError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOrders();
+  }
+
+  Future<void> _loadOrders() async {
+    setState(() {
+      _loadingOrders = true;
+      _ordersError = null;
+    });
+    try {
+      final orders = await ApiService.getIncomingOrders(widget.shopId);
+      if (!mounted) return;
+      setState(() {
+        _activeOrders
+          ..clear()
+          ..addAll(
+            orders.map((order) {
+              final createdAt = DateTime.tryParse(
+                order['created_at']?.toString() ?? '',
+              )?.toLocal();
+              final time = createdAt == null
+                  ? order['created_at']?.toString() ?? ''
+                  : '${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}';
+              final status = OrderStatus.values.firstWhere(
+                (value) => value.name == order['status'],
+                orElse: () => OrderStatus.pending,
+              );
+              final items = (order['items'] as List<dynamic>? ?? const []).map((
+                item,
+              ) {
+                final entry = item as Map<String, dynamic>;
+                return OrderItem(
+                  name: entry['name']?.toString() ?? '',
+                  qty: entry['qty'] as int? ?? 0,
+                  price: (entry['price'] as num).toDouble(),
+                );
+              }).toList();
+              return AdminOrderModel(
+                id: order['id'] as int,
+                token: order['token']?.toString() ?? '',
+                time: time,
+                items: items,
+                total: (order['total'] as num).toDouble(),
+                status: status,
+              );
+            }),
+          );
+        _loadingOrders = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _ordersError = error.toString().replaceFirst('Exception: ', '');
+        _loadingOrders = false;
+      });
+    }
+  }
 
   int get _countPending =>
       _activeOrders.where((o) => o.status == OrderStatus.pending).length;
@@ -141,33 +186,20 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
   int get _countReady =>
       _activeOrders.where((o) => o.status == OrderStatus.ready).length;
 
-  void _updateStatus(int index, OrderStatus newStatus) {
-    setState(() {
-      _activeOrders[index].status = newStatus;
-    });
-  }
-
-  void _addSimulatedUserOrder() {
-    final randomDigits = 1000 + Random().nextInt(9000);
-    final now = TimeOfDay.now();
-    final formattedTime =
-        '${now.hourOfPeriod == 0 ? 12 : now.hourOfPeriod}:${now.minute.toString().padLeft(2, '0')} ${now.period == DayPeriod.am ? 'AM' : 'PM'}';
-
-    setState(() {
-      _activeOrders.insert(
-        0,
-        AdminOrderModel(
-          token: '#TK-$randomDigits',
-          time: formattedTime,
-          items: [
-            OrderItem(name: 'Masala Dosa', qty: 1, price: 50),
-            OrderItem(name: 'Cold Coffee', qty: 1, price: 40),
-          ],
-          total: 90,
-          status: OrderStatus.pending,
+  Future<void> _updateStatus(int index, OrderStatus newStatus) async {
+    final order = _activeOrders[index];
+    try {
+      await ApiService.updateOrderStatus(order.id, newStatus.name);
+      if (!mounted) return;
+      setState(() => order.status = newStatus);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.toString().replaceFirst('Exception: ', '')),
         ),
       );
-    });
+    }
   }
 
   @override
@@ -206,7 +238,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                 ),
               ],
             ),
-          )
+          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -233,7 +265,10 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                             iconColor: const Color(0xFFD97706),
                           ),
                         ),
-                        SizedBox(width: isWide ? 16 : 0, height: isWide ? 0 : 12),
+                        SizedBox(
+                          width: isWide ? 16 : 0,
+                          height: isWide ? 0 : 12,
+                        ),
                         Expanded(
                           flex: isWide ? 1 : 0,
                           child: _buildMetricCard(
@@ -243,7 +278,10 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                             iconColor: const Color(0xFF2563EB),
                           ),
                         ),
-                        SizedBox(width: isWide ? 16 : 0, height: isWide ? 0 : 12),
+                        SizedBox(
+                          width: isWide ? 16 : 0,
+                          height: isWide ? 0 : 12,
+                        ),
                         Expanded(
                           flex: isWide ? 1 : 0,
                           child: _buildMetricCard(
@@ -275,9 +313,9 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                       ),
                     ),
                     ElevatedButton.icon(
-                      onPressed: _addSimulatedUserOrder,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Simulate Incoming User Order'),
+                      onPressed: _loadingOrders ? null : _loadOrders,
+                      icon: const Icon(Icons.refresh, size: 18),
+                      label: const Text('Refresh orders'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF2563EB),
                         foregroundColor: Colors.white,
@@ -295,32 +333,49 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
                 const SizedBox(height: 20),
 
                 // Responsive Orders Grid
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    int crossAxisCount = 1;
-                    if (constraints.maxWidth > 900) {
-                      crossAxisCount = 3;
-                    } else if (constraints.maxWidth > 600) {
-                      crossAxisCount = 2;
-                    }
+                if (_loadingOrders)
+                  const Center(child: CircularProgressIndicator())
+                else if (_ordersError != null)
+                  Center(
+                    child: Column(
+                      children: [
+                        Text('Could not load orders: $_ordersError'),
+                        TextButton(
+                          onPressed: _loadOrders,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (_activeOrders.isEmpty)
+                  const Center(child: Text('No incoming orders yet.'))
+                else
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      int crossAxisCount = 1;
+                      if (constraints.maxWidth > 900) {
+                        crossAxisCount = 3;
+                      } else if (constraints.maxWidth > 600) {
+                        crossAxisCount = 2;
+                      }
 
-                    return GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        crossAxisSpacing: 20,
-                        mainAxisSpacing: 20,
-                        childAspectRatio: crossAxisCount == 1 ? 1.2 : 0.95,
-                      ),
-                      itemCount: _activeOrders.length,
-                      itemBuilder: (context, index) {
-                        final order = _activeOrders[index];
-                        return _buildOrderTicket(order, index);
-                      },
-                    );
-                  },
-                ),
+                      return GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          crossAxisSpacing: 20,
+                          mainAxisSpacing: 20,
+                          childAspectRatio: crossAxisCount == 1 ? 1.2 : 0.95,
+                        ),
+                        itemCount: _activeOrders.length,
+                        itemBuilder: (context, index) {
+                          final order = _activeOrders[index];
+                          return _buildOrderTicket(order, index);
+                        },
+                      );
+                    },
+                  ),
               ],
             ),
           ),
@@ -337,9 +392,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
   }) {
     return Card(
       elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       color: Colors.white,
       child: Padding(
         padding: const EdgeInsets.all(20.0),
@@ -387,10 +440,7 @@ class _AdminOrdersPageState extends State<AdminOrdersPage> {
           // Order Head
           Container(
             color: const Color(0xFFF8FAFC),
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 12,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

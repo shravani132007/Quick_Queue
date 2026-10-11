@@ -1,0 +1,176 @@
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+
+/// Quick Queue / Smart Canteen API Service
+/// Connects Flutter UI with the Flask Backend.
+class ApiService {
+  // Automatically selects localhost for Web / iOS and 10.0.2.2 for Android Emulator
+  static String get baseUrl {
+    if (kIsWeb) {
+      return 'http://127.0.0.1:5000/api';
+    } else if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:5000/api';
+    } else {
+      return 'http://localhost:5000/api';
+    }
+  }
+
+  // ============================================================
+  // AUTHENTICATION
+  // ============================================================
+  static Future<Map<String, dynamic>> login({
+    required String username,
+    required String password,
+    required String role,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/auth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'username': username,
+          'password': password,
+          'role': role,
+        }),
+      );
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ============================================================
+  // SHOPS
+  // ============================================================
+  static Future<List<Map<String, dynamic>>> getShops() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/shops'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return List<Map<String, dynamic>>.from(data['shops'] ?? []);
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<Map<String, dynamic>> registerShop({
+    required String shopNo,
+    required String name,
+    required String ownerName,
+    required String contactNo,
+    required String locationType,
+    required String location,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/shops'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'shop_no': shopNo,
+          'name': name,
+          'owner_name': ownerName,
+          'contact_no': contactNo,
+          'location_type': locationType,
+          'location': location,
+        }),
+      );
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ============================================================
+  // MENU ITEMS
+  // ============================================================
+  static Future<List<Map<String, dynamic>>> getMenuItems(
+    int shopId, {
+    String? category,
+  }) async {
+    try {
+      var url = '$baseUrl/shops/$shopId/menu';
+      if (category != null && category.isNotEmpty && category != 'All') {
+        url += '?category=${Uri.encodeComponent(category)}';
+      }
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return List<Map<String, dynamic>>.from(data['dishes'] ?? []);
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<Map<String, dynamic>> addMenuItem({
+    required int shopId,
+    required String name,
+    required String category,
+    required double price,
+    required int quantity,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/shops/$shopId/menu'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'name': name,
+          'category': category,
+          'price': price,
+          'quantity': quantity,
+        }),
+      );
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  // ============================================================
+  // ORDERS
+  // ============================================================
+  static Future<Map<String, dynamic>> placeOrder({
+    required int shopId,
+    required String customerName,
+    required List<Map<String, dynamic>> items,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/orders'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'shop_id': shopId,
+          'customer_name': customerName,
+          'items': items,
+        }),
+      );
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> getIncomingOrders(int shopId) async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/shops/$shopId/orders'));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return List<Map<String, dynamic>>.from(data['orders'] ?? []);
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  static Future<bool> updateOrderStatus(int orderId, String status) async {
+    try {
+      final response = await http.patch(
+        Uri.parse('$baseUrl/orders/$orderId/status'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'status': status}),
+      );
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+}
